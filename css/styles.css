@@ -229,7 +229,13 @@ body.live .tron-bg { display: none; }
 
 /* ----------------------------------------------------------------- live session */
 .live-session { display: flex; flex-direction: column; height: 100dvh; background: #000; }
-.live-video-wrap { position: relative; flex: 1; overflow: hidden; background: #000; }
+/* Camera takes the lion's share of the screen so the operator can actually frame the
+   subject. The controls/checklist live in a scrollable drawer below it. */
+.live-video-wrap { position: relative; flex: 1 1 auto; min-height: 55dvh; overflow: hidden; background: #000; }
+/* S2 setup drawer: fixed max height, scrolls internally, never squeezes the camera */
+#live-below { flex: 0 0 auto; max-height: 42dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--bg0); border-top: 1px solid var(--line); }
+/* during the live test there is no drawer; the video fills everything */
+.live-session.testing #live-below { max-height: none; }
 .live-video-wrap video, .live-video-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .live-video-wrap.mirror video, .live-video-wrap.mirror canvas { transform: scaleX(-1); }
 .live-video-wrap canvas { pointer-events: none; }
@@ -258,7 +264,13 @@ body.live .tron-bg { display: none; }
 .overlay-status.big { background: none; border: none; font-size: 7rem; font-weight: 900; font-family: 'Orbitron', sans-serif; color: var(--orange); text-shadow: 0 0 50px rgba(255,106,0,.9); padding: 0; backdrop-filter: none; }
 .progress { width: 220px; height: 8px; background: rgba(0, 212, 255, 0.15); border: 1px solid var(--line); overflow: hidden; margin: 12px auto 0; }
 .progress > div { height: 100%; width: 0; background: var(--blue); box-shadow: var(--blue-glow); transition: width .1s; }
-.angle-panel { position: absolute; left: 10px; bottom: 10px; background: rgba(5,10,22,.65); border: 1px solid var(--line); padding: 6px 10px; font-family: 'Rajdhani', monospace; font-size: .78rem; line-height: 1.5; z-index: 5; pointer-events: none; white-space: pre-line; color: var(--blue); }
+.angle-panel { position: absolute; left: 8px; top: 8px; background: rgba(5,10,22,.55); border: 1px solid var(--line); padding: 4px 8px; font-family: 'Rajdhani', monospace; font-size: .68rem; line-height: 1.4; z-index: 5; pointer-events: none; white-space: pre-line; color: var(--blue); opacity: .85; border-radius: 2px; }
+
+/* slim calibration bar pinned to the bottom edge of the video (never covers the subject) */
+.calib-bar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; background: rgba(5,10,22,.82); border-top: 1px solid var(--line); padding: 8px 14px calc(8px + env(safe-area-inset-bottom)); pointer-events: none; }
+.calib-bar .cp-txt { font-family: 'Orbitron', sans-serif; font-size: .78rem; letter-spacing: 1px; color: var(--green); text-align: center; margin-bottom: 6px; }
+.calib-bar .cp-track { height: 8px; background: rgba(0,212,255,.15); border: 1px solid var(--line); overflow: hidden; }
+.calib-bar .cp-fill { height: 100%; width: 0; background: var(--green); box-shadow: 0 0 10px rgba(76,223,124,.6); transition: width .12s; }
 
 .controls { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--bg0); border-top: 1px solid var(--line); align-items: center; justify-content: center; }
 .controls .btn { flex: 1 1 auto; min-width: 72px; min-height: 44px; padding: 8px 10px; font-size: clamp(.66rem, 2.8vw, .8rem); letter-spacing: 1px; }

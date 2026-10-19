@@ -72,12 +72,19 @@
         const diag = el('div', { class: 'angle-panel', id: 'diag-panel' });
         wrap.appendChild(diag);
 
+        // slim calibration bar pinned to the bottom of the video (does not cover the subject)
+        const calibBar = el('div', { class: 'calib-bar', id: 'calib-bar', style: 'display:none' }, [
+            el('div', { class: 'cp-txt', text: 'HOLD STILL · CALIBRATING' }),
+            el('div', { class: 'cp-track' }, [el('div', { class: 'cp-fill' })])
+        ]);
+        wrap.appendChild(calibBar);
+
         const session = el('section', { class: 'live-session' });
         session.appendChild(wrap);
         const below = el('div', { id: 'live-below' });
         session.appendChild(below);
 
-        dom = { session, wrap, video, canvas, hud, statusBox, gaugeL, gaugeR, bubble, diag, below };
+        dom = { session, wrap, video, canvas, hud, statusBox, gaugeL, gaugeR, bubble, diag, below, calibBar };
         return session;
     }
 
@@ -179,25 +186,31 @@
                 el('span', { text: label + (required ? '' : ' (advisory)') })
             ]));
         });
+        // START first (reachable without scrolling), then help, checklist, then advanced.
+        const startRow = el('div', { class: 'controls', style: 'border-top:none' }, [
+            el('button', { class: 'btn btn-primary', type: 'button', id: 'btn-start', disabled: 'true', onclick: onStartTest }, 'Start Test')
+        ]);
+        below.appendChild(startRow);
+
+        below.appendChild(el('div', { class: 'note info', id: 's2-note', style: 'margin:10px',
+            html: 'Stand so your <b>whole body and both feet</b> show in the camera above, then <b>hold still ~2&nbsp;s</b> to calibrate. START turns on automatically.' }));
+
         below.appendChild(el('div', { class: 'panel', style: 'margin:10px' }, [
-            el('h3', { text: 'Frame-fit & camera checks' }),
-            el('p', { class: 'status', style: 'margin-bottom:6px', text: 'Required checks + a 2-second still calibration enable START. "Advisory" items only guide setup.' }),
+            el('h3', { text: 'Setup checks' }),
             checklist
         ]));
 
-        // controls: overrides + recalibrate + START
-        const controls = el('div', { class: 'controls' });
+        // advanced options tucked into a collapsible so they don't clutter the drawer
+        const adv = el('details', { style: 'margin:10px' });
+        adv.appendChild(el('summary', { text: 'Advanced (overrides, sensor)' }));
+        const controls = el('div', { class: 'controls', style: 'border-top:none' });
+        controls.appendChild(el('button', { class: 'btn btn-small', type: 'button', id: 'btn-recalib', onclick: startCalibration }, 'Recalibrate'));
+        controls.appendChild(el('button', { class: 'btn btn-small', type: 'button', onclick: requestMotionPermission }, 'Enable tilt sensor'));
         controls.appendChild(el('button', { class: 'btn btn-small', type: 'button', id: 'btn-override-facing', onclick: () => toggleOverride('facing') }, 'Override facing'));
         controls.appendChild(el('button', { class: 'btn btn-small', type: 'button', id: 'btn-override-level', onclick: () => toggleOverride('level') }, 'Override level'));
         controls.appendChild(el('button', { class: 'btn btn-small', type: 'button', id: 'btn-override-hip', onclick: () => toggleOverride('hipHeight') }, 'Override height'));
-        controls.appendChild(el('button', { class: 'btn btn-small', type: 'button', onclick: requestMotionPermission }, 'Enable tilt sensor'));
-        controls.appendChild(el('button', { class: 'btn btn-small', type: 'button', id: 'btn-recalib', onclick: startCalibration }, 'Recalibrate'));
-        controls.appendChild(el('button', { class: 'btn btn-primary', type: 'button', id: 'btn-start', disabled: 'true', onclick: onStartTest }, 'Start Test'));
-        below.appendChild(controls);
-
-        // calibration progress note
-        below.appendChild(el('div', { class: 'note info', id: 's2-note', style: 'margin:10px',
-            html: 'Fit the whole body and feet in frame, face the camera, keep the phone level at hip height, then stand still to calibrate.' }));
+        adv.appendChild(controls);
+        below.appendChild(adv);
     }
 
     function toggleOverride(key) {
@@ -307,6 +320,7 @@
         if (calib.done) { checks.still = true; return; }
         if (!frameFitOk) {
             calib.active = false; calib.samples = []; checks.still = false;
+            hideCalibBar();
             return;
         }
         if (!calib.active) startCalibration();
@@ -379,6 +393,7 @@
         calib.result = result;
         calib.done = true;
         calib.active = false;
+        hideCalibBar();
         // feed s0guess from the real calibration so gauges are accurate
         s0guess.l = S0_L; s0guess.r = S0_R;
 
@@ -395,13 +410,19 @@
     }
 
     function setCalibProgress(frac) {
-        // reuse status overlay with a progress bar during the hold
+        // Slim non-blocking bar pinned to the BOTTOM of the video so the subject stays
+        // fully visible while calibrating. Never a big centre overlay.
         if (calib.done) return;
-        const s = dom.statusBox;
-        s.style.display = '';
-        s.className = 'overlay-status';
-        s.innerHTML = 'HOLD STILL<div class="progress"><div style="width:' + (clamp01(frac) * 100).toFixed(0) + '%"></div></div>';
+        const bar = dom.calibBar;
+        if (bar) {
+            bar.style.display = 'block';
+            bar.querySelector('.cp-fill').style.width = (clamp01(frac) * 100).toFixed(0) + '%';
+            bar.querySelector('.cp-txt').textContent = 'HOLD STILL · CALIBRATING ' + Math.round(clamp01(frac) * 100) + '%';
+        }
+        // keep the centre overlay clear during calibration
+        setStatus(null);
     }
+    function hideCalibBar() { if (dom && dom.calibBar) dom.calibBar.style.display = 'none'; }
 
     function renderChecklist() {
         const set = (k) => {
@@ -484,13 +505,11 @@
     // ---- diagnostics panel ---------------------------------------------------
     function updateDiag(img, vw, vh, facing) {
         if (!dom || !dom.diag) return;
-        if (!img) { dom.diag.textContent = 'no person'; return; }
+        if (!img) { dom.diag.textContent = 'tracking…'; return; }
+        // minimal, unobtrusive: tracked-landmark count + fps only
         const valid = ['l_sh', 'r_sh', 'l_hip', 'r_hip', 'l_kn', 'r_kn', 'l_an']
             .reduce((n, k) => n + (Geom.lm(img, k).v >= C.signal.minVisibility ? 1 : 0), 0);
-        dom.diag.textContent =
-            `L ${(live.pEma.l * 100).toFixed(0)}%  R ${(live.pEma.r * 100).toFixed(0)}%\n` +
-            `valid ${valid}/7  fps ${engine.fpsEMA ? engine.fpsEMA.toFixed(0) : '—'}\n` +
-            `front ${facing ? facing.frontalness.toFixed(2) : '—'}  pitch ${orient.pitch == null ? 'N/A' : orient.pitch.toFixed(0) + '°'} roll ${orient.roll == null ? 'N/A' : orient.roll.toFixed(0) + '°'}`;
+        dom.diag.textContent = `track ${valid}/7 · ${engine.fpsEMA ? engine.fpsEMA.toFixed(0) : '—'} fps`;
     }
 
     // ---- gauges --------------------------------------------------------------
@@ -677,6 +696,9 @@
         S3.beepsDone = {}; S3.manualStop = false; S3.tabHidden = false;
 
         buildS3UI();
+        // during the test the camera fills the whole screen (no setup drawer)
+        if (S3.dom.session) S3.dom.session.classList.add('testing');
+        if (S3.dom.calibBar) S3.dom.calibBar.style.display = 'none';
         // gauges visible, tick at threshold
         S3.dom.gaugeL.style.display = S3.dom.gaugeR.style.display = '';
         LS._ctx().setGaugeTick(S3.dom.gaugeL, S3.cal.threshold_p);
