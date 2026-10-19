@@ -12,9 +12,6 @@
 
 **Live data (Google Sheet):** https://docs.google.com/spreadsheets/d/1aQdyVw2kWy_kscfBcKeEl4UxWG5OC9izGOEGhg86k7E/edit?usp=sharing
 
-**Reference app (Sit-to-Stand):** https://aaron-chen-angus.github.io/icare-sts/
-
-
 ---
 
 ## Table of contents
