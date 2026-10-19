@@ -165,7 +165,10 @@ body.live .tron-bg { display: none; }
 .btn-large { width: 100%; min-height: 58px; font-size: 1.1rem; }
 
 .row { display: flex; gap: 10px; flex-wrap: wrap; }
-.row > * { flex: 1; }
+.row > * { flex: 1 1 140px; min-width: 120px; }
+/* results actions: full-width stacked buttons (never collapse into letter-columns) */
+.action-stack { display: flex; flex-direction: column; gap: 10px; }
+.action-stack > .btn { width: 100%; }
 
 /* ----------------------------------------------------------------- instructions */
 .instructions { list-style: none; counter-reset: step; display: flex; flex-direction: column; gap: 10px; }

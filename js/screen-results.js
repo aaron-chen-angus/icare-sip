@@ -98,8 +98,8 @@
     function makeSessionId() { return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8); }
 
     function maybeUpload(record, res) {
+        // Automatic upload — no consent gate. Fires as soon as the analysis completes.
         if (!C.sheets.webhookUrl) return;
-        if (!App().state.participant.consent_upload) return;
         if (global.Exporter && Exporter.queueUpload) {
             try { Exporter.queueUpload(record, res); } catch (e) { console.warn('upload queue failed', e); }
         }
@@ -322,38 +322,58 @@
     function fx(v, d) { return (v == null || !isFinite(v)) ? '—' : Number(v).toFixed(d); }
     function fmtDur(s) { s = Math.round(s || 0); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 
-    // ---- actions + dialogs (Flutter parity) ----
+    // ---- actions + dialogs ----
     function actionsRow(res, record) {
         const el = App().el;
         const st = App().state;
         const panel = el('div', { class: 'panel' }, [el('h3', { text: 'Actions' })]);
-        const row = el('div', { class: 'row' });
-
-        row.appendChild(el('button', { class: 'btn', type: 'button', onclick: () => retryDialog() }, 'Retry test'));
+        // full-width stacked buttons so labels never wrap into letter-columns
+        const stack = el('div', { class: 'action-stack' });
 
         if (st.attemptNumber > 1 && st.previousResult) {
-            row.appendChild(el('button', { class: 'btn', type: 'button', onclick: () => keepUseDialog() }, 'Keep / Use'));
+            stack.appendChild(el('button', { class: 'btn btn-primary btn-large', type: 'button', onclick: () => keepUseDialog() }, 'Keep / Use result'));
         } else {
-            row.appendChild(el('button', { class: 'btn btn-primary', type: 'button', onclick: () => submitDialog() }, 'Use this result'));
+            stack.appendChild(el('button', { class: 'btn btn-primary btn-large', type: 'button', onclick: () => submitDialog() }, 'Use this result'));
         }
-        row.appendChild(el('button', { class: 'btn', type: 'button', onclick: () => downloadZip() }, 'Download ZIP'));
-        row.appendChild(el('button', { class: 'btn', type: 'button', onclick: () => App().renderHistory() }, 'History'));
-        row.appendChild(el('button', { class: 'btn', type: 'button', onclick: () => newParticipantGuard() }, 'New participant'));
-        panel.appendChild(row);
 
-        // upload status line
-        const up = el('div', { class: 'status', id: 'upload-status', style: 'margin-top:8px' });
-        up.textContent = uploadStatusText();
-        panel.appendChild(up);
+        // ---- Google Sheets panel (automatic upload; manual re-send available) ----
+        if (C.sheets.webhookUrl) {
+            const sheetBox = el('div', { class: 'panel', style: 'margin:8px 0;padding:12px' });
+            sheetBox.appendChild(el('div', { class: 'status', id: 'upload-status', style: 'margin-bottom:8px' }, uploadStatusText()));
+            sheetBox.appendChild(el('button', { class: 'btn btn-large', type: 'button', id: 'btn-upload', onclick: () => uploadNow() }, 'Upload to Google Sheets again'));
+            stack.appendChild(sheetBox);
+        }
+
+        stack.appendChild(el('button', { class: 'btn btn-large', type: 'button', onclick: () => downloadZip() }, 'Download ZIP'));
+        stack.appendChild(el('button', { class: 'btn btn-large', type: 'button', onclick: () => retryDialog() }, 'Retry test'));
+        stack.appendChild(el('button', { class: 'btn btn-large', type: 'button', onclick: () => App().renderHistory() }, 'History'));
+        stack.appendChild(el('button', { class: 'btn btn-large', type: 'button', onclick: () => newParticipantGuard() }, 'New participant'));
+        panel.appendChild(stack);
+
+        if (!C.sheets.webhookUrl) {
+            panel.appendChild(el('div', { class: 'status', id: 'upload-status', style: 'margin-top:8px' }, uploadStatusText()));
+        }
         return panel;
+    }
+
+    // Manual re-send from the results screen (upload is already automatic).
+    function uploadNow() {
+        const st = App().state;
+        const us = document.getElementById('upload-status');
+        if (!C.sheets.webhookUrl) { if (us) us.textContent = uploadStatusText(); return; }
+        if (global.Exporter) {
+            if (Exporter.saveHistory) Exporter.saveHistory(st.results.record, st.results.res);
+            if (Exporter.retryUpload) Exporter.retryUpload(st.results.record.session_id);
+            if (Exporter.queueUpload) Exporter.queueUpload(st.results.record, st.results.res);
+        }
+        if (us) us.textContent = 'Uploading…';
+        setTimeout(() => { if (us) us.textContent = 'Sheets: ' + (Exporter.outboxStatus ? Exporter.outboxStatus() : 'sent'); }, 1500);
     }
 
     function uploadStatusText() {
         if (!C.sheets.webhookUrl) return 'Sheets: not configured (local ZIP export only).';
-        if (!App().state.participant.consent_upload) return 'Sheets: consent not given — not uploaded.';
         const q = global.Exporter && Exporter.outboxStatus ? Exporter.outboxStatus() : null;
-        if (q == null) return 'Sheets: ready.';
-        return 'Sheets: ' + q;
+        return 'Sheets: ' + (q == null ? 'uploaded automatically' : q);
     }
 
     function submitDialog() {
@@ -371,7 +391,7 @@
         st.results.record.selected_as_final = true;
         if (global.Exporter) {
             if (Exporter.saveHistory) Exporter.saveHistory(st.results.record, st.results.res);
-            if (C.sheets.webhookUrl && st.participant.consent_upload && Exporter.queueUpload) Exporter.queueUpload(st.results.record, st.results.res);
+            if (C.sheets.webhookUrl && Exporter.queueUpload) Exporter.queueUpload(st.results.record, st.results.res);
         }
         const up = document.getElementById('upload-status');
         if (up) up.textContent = 'Marked as final. ' + uploadStatusText();
@@ -453,7 +473,10 @@
         const record = zeroRecord(participant, sid);
         st.results = { res: { summary: record, steps: [], frames: [] }, record };
         st.sessionId = sid;
-        if (global.Exporter && Exporter.saveHistory) { try { Exporter.saveHistory(record, st.results.res); } catch (e) {} }
+        if (global.Exporter) {
+            try { if (Exporter.saveHistory) Exporter.saveHistory(record, st.results.res); } catch (e) {}
+            try { if (C.sheets.webhookUrl && Exporter.queueUpload) Exporter.queueUpload(record, st.results.res); } catch (e) {}
+        }
         const el = App().el;
         App().mount(el('section', { class: 'screen center' }, [
             el('div', { class: 'logo', html: 'SIP<span class="slash">//</span>LAB' }),

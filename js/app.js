@@ -317,7 +317,7 @@
             <label class="check"><input type="checkbox" id="c-safety"> <span>Safety: participant is fit for the test and supervised.</span></label>
             <label class="check"><input type="checkbox" id="c-briefed"> <span>Protocol briefed: marching, knee height, rest allowed.</span></label>
             <label class="check check-covariate"><input type="checkbox" id="c-support"> <span>Support used (wall/chair) — optional covariate, not penalised.</span></label>
-            ${sheetsConfigured ? '<label class="check"><input type="checkbox" id="c-consent"> <span>Consent to upload anonymised numeric results to the research sheet.</span></label>' : ''}
+            ${sheetsConfigured ? '<div class="note info" style="margin-top:4px">Results are uploaded to Google Sheets automatically when the test completes.</div>' : ''}
             <div class="err" id="err-checks"></div>
             <details class="more-info">
                 <summary>Privacy & limits</summary>
@@ -348,7 +348,7 @@
             protocol_briefed: c('c-briefed'),
             support_used: c('c-support'),
             unable_to_perform: false,   // set only via the separate "Cannot do test" button
-            consent_upload: c('c-consent')
+            consent_upload: true        // upload is automatic (no consent gate)
         };
     }
 
