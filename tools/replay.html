@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SIP//LAB — Replay & threshold tuning</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../css/styles.css">
+    <style>
+        body { padding: 16px; }
+        .tool { max-width: 900px; margin: 0 auto; }
+        .ctl { display: grid; grid-template-columns: 160px 1fr 70px; gap: 8px; align-items: center; margin: 6px 0; }
+        .ctl label { color: var(--blue); font-size: .8rem; text-transform: uppercase; letter-spacing: 1px; }
+        .big { font-family: 'Orbitron'; font-size: 2rem; }
+        canvas { width: 100%; height: 260px; background: #0a1120; border: 1px solid var(--line); display: block; margin-top: 10px; }
+        input[type=file] { color: var(--text); }
+    </style>
+</head>
+<body>
+    <div class="tron-bg"><div class="grid-floor"></div><div class="scanlines"></div></div>
+    <div class="tool" id="app">
+        <div class="logo">SIP<span class="slash">//</span>LAB</div>
+        <div class="subtitle">Replay &amp; threshold tuning</div>
+        <div class="panel brackets" style="margin-top:12px">
+            <p class="status">Load a <code>*_frames_raw.csv</code> from a session ZIP, adjust thresholds, and re-run the authoritative analysis — no re-testing. Height is read from the file name or entered below. No install.</p>
+            <div class="ctl"><label>Raw CSV</label><input type="file" id="file" accept=".csv"><span></span></div>
+            <div class="ctl"><label>Height (cm)</label><input type="range" id="height" min="120" max="210" value="170"><span id="heightV">170</span></div>
+            <div class="ctl"><label>Sex</label>
+                <select id="sex"><option value="male">male</option><option value="female">female</option><option value="other">other</option></select><span></span></div>
+            <div class="ctl"><label>Age</label><input type="range" id="age" min="18" max="100" value="70"><span id="ageV">70</span></div>
+            <div class="ctl"><label>count P</label><input type="range" id="countP" min="0.50" max="1.20" step="0.01" value="0.85"><span id="countPV">0.85</span></div>
+            <div class="ctl"><label>release P</label><input type="range" id="releaseP" min="0.20" max="0.90" step="0.01" value="0.55"><span id="releasePV">0.55</span></div>
+            <div class="ctl"><label>cutoff Hz</label><input type="range" id="cutoff" min="2" max="12" step="0.5" value="8"><span id="cutoffV">8</span></div>
+            <div class="ctl"><label>min prominence</label><input type="range" id="prom" min="0.05" max="0.6" step="0.01" value="0.2"><span id="promV">0.2</span></div>
+        </div>
+        <div class="panel center" style="margin-top:12px">
+            <div class="big" id="counts">R — · L — · T —</div>
+            <div class="status" id="meta">Load a file to begin.</div>
+        </div>
+        <canvas id="plot"></canvas>
+        <div class="footer-limits">Tuning tool for the pilot (F6). Change CONFIG defaults only after validation, then bump analysis_version.</div>
+    </div>
+
+    <script src="../js/config.js"></script>
+    <script src="../js/schema.js"></script>
+    <script src="../js/geom.js"></script>
+    <script src="../js/analysis.js"></script>
+    <script>
+    (function () {
+        'use strict';
+        let raw = null;             // {data,n,cols,tracked}
+        const COLS = 1 + CONFIG.tracked.length * 7;
+        const IDX = {}; CONFIG.tracked.forEach((m, i) => { IDX[m.key] = i; });
+
+        const $ = id => document.getElementById(id);
+        ['height', 'age', 'countP', 'releaseP', 'cutoff', 'prom'].forEach(id => {
+            $(id).addEventListener('input', () => { $(id + 'V').textContent = $(id).value; rerun(); });
+        });
+        $('sex').addEventListener('change', rerun);
+
+        $('file').addEventListener('change', e => {
+            const f = e.target.files[0]; if (!f) return;
+            // try to read height from filename if present (…_SIP…)
+            const reader = new FileReader();
+            reader.onload = () => { parseCSV(reader.result); rerun(); };
+            reader.readAsText(f);
+        });
+
+        function parseCSV(text) {
+            const lines = text.replace(/\r/g, '').split('\n').filter(l => l.length);
+            const header = lines[0].split(',');
+            // expected: session_id + t_ms + 17*7 keys. Build a column index map.
+            const col = {}; header.forEach((h, i) => col[h] = i);
+            const n = lines.length - 1;
+            const data = new Float32Array(n * COLS);
+            for (let k = 0; k < n; k++) {
+                const parts = lines[k + 1].split(',');
+                const base = k * COLS;
+                data[base] = Number(parts[col['t_ms']]);
+                CONFIG.tracked.forEach((m, i) => {
+                    const o = base + 1 + i * 7;
+                    ['x', 'y', 'z', 'v', 'wx', 'wy', 'wz'].forEach((suf, c) => {
+                        const key = m.key + '_' + suf;
+                        const idx = col[key];
+                        data[o + c] = idx != null ? Number(parts[idx]) : (suf === 'v' ? 1 : NaN);
+                    });
+                });
+            }
+            raw = { data, n, cols: COLS, tracked: CONFIG.tracked.map(m => m.key) };
+            $('meta').textContent = `Loaded ${n} frames.`;
+        }
+
+        // reconstruct a calibration from the first stand-still second of the file
+        function reconstructCalibration(cfg) {
+            const vw = 720, vh = 1280; // normalised coords; pixel scale cancels in p. Use nominal.
+            // use the lowest-knee frames in the first seconds as "standing"
+            const get = (k, key, comp) => raw.data[k * COLS + 1 + IDX[key] * 7 + comp];
+            const t = k => raw.data[k * COLS];
+            const dL = [], dR = [], chain = [], shW = [], trunk = [], hipX = [], hipY = [];
+            for (let k = 0; k < raw.n; k++) {
+                if (t(k) > 1500) break; // first 1.5 s (pre-roll + a bit)
+                const ky = (key) => get(k, key, 1) * vh, kx = (key) => get(k, key, 0) * vw;
+                dL.push(ky('l_kn') - ky('l_hip')); dR.push(ky('r_kn') - ky('r_hip'));
+                const ch = s => dist(kx(s + '_sh'), ky(s + '_sh'), kx(s + '_hip'), ky(s + '_hip')) +
+                    dist(kx(s + '_hip'), ky(s + '_hip'), kx(s + '_kn'), ky(s + '_kn')) +
+                    dist(kx(s + '_kn'), ky(s + '_kn'), kx(s + '_an'), ky(s + '_an'));
+                chain.push((ch('l') + ch('r')) / 2);
+                shW.push(Math.abs(kx('l_sh') - kx('r_sh')));
+                trunk.push(dist((kx('l_sh') + kx('r_sh')) / 2, (ky('l_sh') + ky('r_sh')) / 2, (kx('l_hip') + kx('r_hip')) / 2, (ky('l_hip') + ky('r_hip')) / 2));
+                hipX.push((kx('l_hip') + kx('r_hip')) / 2); hipY.push((ky('l_hip') + ky('r_hip')) / 2);
+            }
+            const med = a => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[b.length >> 1] : 1; };
+            const S0L = med(dL) || 1, S0R = med(dR) || 1, chainpx = med(chain) || 1;
+            const h = Number($('height').value) / 100;
+            return {
+                mode: 'standstill', S0: { l: S0L, r: S0R }, S0w: null,
+                scale_m_per_px: (cfg.anthropometry.segmentChainFractionOfHeight * h) / chainpx,
+                chain_px: chainpx, shoulder_width_px: med(shW), trunk_px: med(trunk),
+                hip_mid_x_px: med(hipX), hip_mid_y_px: med(hipY), hip_y_norm: med(hipY) / vh,
+                ankle_l_x: 0.5, ankle_r_x: 0.5, frontalness: 0.9, jitter: 0.01, hold_s: 1.0,
+                camera_pitch_deg: 0, camera_roll_deg: 0, overrides: {}, vw, vh,
+                threshold_p: Number($('countP').value), threshold_preset: 'replay'
+            };
+        }
+        function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+
+        function rerun() {
+            if (!raw) return;
+            const cfg = JSON.parse(JSON.stringify(CONFIG));
+            cfg.events.countP = Number($('countP').value);
+            cfg.events.releaseP = Number($('releaseP').value);
+            cfg.signal.cutoffHz = Number($('cutoff').value);
+            cfg.events.minProminence = Number($('prom').value);
+            const cal = reconstructCalibration(cfg);
+            const participant = { participant_id: 'replay', age_years: Number($('age').value), sex: $('sex').value, height_cm: Number($('height').value), support_used: false };
+            let res;
+            try { res = SIPAnalysis.run(raw, cal, participant, cfg); }
+            catch (e) { $('meta').textContent = 'Analysis error: ' + e.message; return; }
+            const s = res.summary;
+            $('counts').textContent = `R ${s.steps_right} · L ${s.steps_left} · T ${s.steps_total}`;
+            $('meta').textContent = `cadence ${fmt(s.cadence_total_steps_per_min)} /min · norm ${s.norm_classification} · qc ${s.qc_pass ? 'OK' : 'REVIEW'} · flags ${s.qc_flags || '—'}`;
+            plot(res, cfg);
+        }
+        function fmt(x) { return x == null ? '—' : Number(x).toFixed(0); }
+
+        function plot(res, cfg) {
+            const c = $('plot'), dpr = window.devicePixelRatio || 1;
+            const rect = c.getBoundingClientRect();
+            c.width = rect.width * dpr; c.height = 260 * dpr;
+            const ctx = c.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            const w = rect.width, h = 260;
+            ctx.clearRect(0, 0, w, h);
+            const grid = res._grid, N = res._N, pL = res._p.l, pR = res._p.r;
+            const dur = cfg.protocol.durationS, pMax = 1.6;
+            const X = tt => (Math.max(0, Math.min(dur, tt)) / dur) * w;
+            const Y = p => (1 - Math.max(0, Math.min(pMax, p)) / pMax) * h;
+            // threshold + hip lines
+            ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.setLineDash([5, 4]);
+            ctx.beginPath(); ctx.moveTo(0, Y(1)); ctx.lineTo(w, Y(1)); ctx.stroke();
+            ctx.strokeStyle = '#4cdf7c'; ctx.beginPath(); ctx.moveTo(0, Y(cfg.events.countP)); ctx.lineTo(w, Y(cfg.events.countP)); ctx.stroke();
+            ctx.setLineDash([]);
+            drawS(ctx, grid, pL, N, X, Y, '#00d4ff', dur);
+            drawS(ctx, grid, pR, N, X, Y, '#ff6a00', dur);
+            res.steps.filter(s => s.counted).forEach(s => {
+                ctx.fillStyle = s.leg === 'right' ? '#ff6a00' : '#00d4ff';
+                ctx.beginPath(); ctx.arc(X(s.t_peak_s), Y(s.peak_progress), 2.5, 0, 6.2832); ctx.fill();
+            });
+        }
+        function drawS(ctx, grid, arr, N, X, Y, col, dur) {
+            ctx.strokeStyle = col; ctx.lineWidth = 1.2; ctx.beginPath(); let started = false;
+            for (let i = 0; i < N; i++) { if (grid[i] < 0 || grid[i] > dur) continue; const x = X(grid[i]), y = Y(arr[i]); started ? ctx.lineTo(x, y) : (ctx.moveTo(x, y), started = true); }
+            ctx.stroke();
+        }
+    })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SIP//LAB — Data Dictionary generator</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Rajdhani', system-ui, sans-serif; background: #05070d; color: #dfe9ff; padding: 16px; max-width: 980px; margin: 0 auto; }
+        h1 { font-family: 'Orbitron', sans-serif; color: #00d4ff; font-size: 1.3rem; }
+        h1 .slash { color: #ff6a00; }
+        button { font-family: 'Orbitron', sans-serif; background: transparent; color: #ff6a00; border: 1.5px solid #ff6a00; padding: 10px 18px; cursor: pointer; letter-spacing: 1px; margin: 8px 8px 8px 0; }
+        button:hover { background: rgba(255,106,0,.1); }
+        pre { background: #0a1120; border: 1px solid rgba(0,212,255,.28); padding: 12px; overflow: auto; max-height: 60vh; font-size: .8rem; white-space: pre-wrap; }
+        .status { color: #8fa6c8; }
+    </style>
+</head>
+<body>
+    <h1>SIP<span class="slash">//</span>LAB — Data Dictionary generator</h1>
+    <p class="status">Reads <code>js/schema.js</code> + <code>js/config.js</code> and generates <b>DATA_DICTIONARY.md</b>. No install. Open from file:// or Pages.</p>
+    <button id="gen">Generate</button>
+    <button id="dl">Download DATA_DICTIONARY.md</button>
+    <button id="copy">Copy to clipboard</button>
+    <pre id="out">Click Generate…</pre>
+
+    <script src="../js/config.js"></script>
+    <script src="../js/schema.js"></script>
+    <script>
+    (function () {
+        'use strict';
+        let md = '';
+
+        function esc(s) { return String(s == null ? '' : s).replace(/\|/g, '\\|'); }
+
+        function groupTable(title, fields, extraCols) {
+            let out = '\n### ' + title + '\n\n';
+            out += '| # | Column | Type | Unit | Description | Calculation / source |\n';
+            out += '|---|--------|------|------|-------------|----------------------|\n';
+            let i = 1;
+            // keep declaration order but visually group by `group`
+            fields.forEach(f => {
+                out += `| ${i++} | \`${esc(f.key)}\` | ${esc(f.type)} | ${esc(f.unit) || '—'} | ${esc(f.desc)} | ${esc(f.calc)} |\n`;
+            });
+            return out;
+        }
+
+        function build() {
+            const S = SCHEMA, C = CONFIG;
+            let d = '';
+            d += '# SIP//LAB — Data Dictionary\n\n';
+            d += `_Generated from \`schema.js\` v${S.version} and \`config.js\` v${C.app.version} by tools/dictionary.html. Do not edit by hand._\n\n`;
+            d += 'SIP//LAB is the 2-Minute Step-in-Place Biomechanics Lab (frontal view). This dictionary documents every exported column, pose marker, derived quantity, QC flag and algorithm parameter.\n';
+
+            // §1 Conventions
+            d += '\n## 1. Conventions\n\n';
+            d += '- **Time**: `t = 0` at "GO". The scored window is `[0, 120]` s. Calibration and the 3-2-1 countdown have negative time (pre-roll).\n';
+            d += '- **Image coordinates**: MediaPipe gives normalised `x, y ∈ [0,1]`. All distances/angles are computed in **pixels** first: `x_px = x_norm × video_width`, `y_px = y_norm × video_height`.\n';
+            d += '- **Vertical sign**: image `y` increases downward. Reported vertical quantities (knee rise, velocity) are **positive-up**.\n';
+            d += '- **Lift progress** `p`: `0` standing, `1` knee level with hip, `>1` above hip. Uses the **vertical** `knee_y − hip_y` only (never the 2-D thigh length).\n';
+            d += '- **Anatomical sides**: right = orange, left = blue throughout. Geometry runs on the un-mirrored frame; the participant\'s right side appears on image-left.\n';
+            d += '- **World landmarks** (`_wx,_wy,_wz`, metres) are used only as a 3-D cross-check, never for counting.\n';
+            d += '- **Booleans** export as `true`/`false`. Missing values export as empty (no `-1` sentinels).\n';
+
+            // §2 Sessions
+            d += '\n## 2. Summary (Sessions) — one row per test\n';
+            d += byGroup(S.sessions);
+
+            // §3 Steps
+            d += '\n## 3. Steps — one row per detected lift\n';
+            d += groupTable('Step', S.steps);
+
+            // §4 Frames analysis
+            d += '\n## 4. Frames (analysis, 30 Hz)\n';
+            d += groupTable('Frame', S.framesAnalysis);
+
+            // §5 Raw frames
+            d += '\n## 5. Raw frames (device rate)\n\n';
+            d += 'One row per captured frame: `t_ms` (relative to GO) followed by 17 markers × 7 values (`_x,_y,_z` normalised, `_v` visibility, `_wx,_wy,_wz` world metres).\n';
+            d += groupTable('Raw', S.framesRaw);
+
+            // §6 Markers
+            d += '\n## 6. Tracked pose markers\n\n';
+            d += '| Key | MediaPipe index | Name | Role in SIP//LAB (frontal view) |\n|-----|-----------------|------|----------------------------------|\n';
+            S.markers.forEach(m => { d += `| \`${m.key}\` | ${m.idx} | ${esc(m.name)} | ${esc(m.role)} |\n`; });
+
+            // §7 Definitions of derived quantities
+            d += '\n## 7. Definitions of derived quantities\n\n';
+            [
+                ['Valid sample', 'Landmark with visibility ≥ `signal.minVisibility` and inside the frame; otherwise missing (bridged if the gap ≤ `signal.maxGapS`, else flagged).'],
+                ['Standing thigh length `S0_s`', 'Median over the calibration hold of `knee_y_px − hip_y_px` for side s (px, vertical only).'],
+                ['Lift progress `p_s(t)`', '`1 − (knee_y_px − hip_y_px) / S0_s`; 0 standing, 1 knee at hip, >1 above hip.'],
+                ['Count threshold `countP`', `${C.events.countP} default ("a little at hip level"); "official midpoint" preset = ${C.events.countPOfficial}.`],
+                ['Counted step', 'Local maximum of filtered `p_s` with peak ≥ `countP`, preceded by a fall to ≤ `releaseP` since the previous counted peak of that leg, and `t_peak ≤ 120 s`.'],
+                ['`t_onset` / `t_peak` / `t_offset`', 'Upward `lowP` crossing before the peak / time of the peak / downward `lowP` crossing after the peak.'],
+                ['`lifting / lowering / transition time`', '`t_peak − t_onset`, `t_offset − t_peak`, `t_offset − t_onset`.'],
+                ['Same-leg step interval', '`t_peak(k) − t_peak(k−1)` for the same leg; alternation interval = to the previous peak of the opposite leg.'],
+                ['`knee_rise_cm`', '`(S0_s − (knee_y_px − hip_y_px)_peak) × scale_m_per_px × 100`.'],
+                ['Scale `scale_m_per_px`', '`0.779 × height_m ÷ chainpx` (Winter 2009); `chainpx` = mean shoulder→hip→knee→ankle pixel chain at standing calibration.'],
+                ['Knee vertical velocity', 'Central-difference derivative of the filtered knee height in metres (positive = rising).'],
+                ['Cadence', '`steps ÷ (test_duration_s / 60)` per leg and total.'],
+                ['Coefficient of variation', '`SD ÷ mean × 100` (sample SD, n−1).'],
+                ['Interval slope', 'OLS slope of step interval vs step number (needs ≥ 4 steps).'],
+                ['Quarter counts', 'q1 = [0,30), q2 = [30,60), q3 = [60,90), q4 = [90,120] s by `t_peak`.'],
+                ['Rate change %', '`(q4 − q1) ÷ q1 × 100` (negative = slowing).'],
+                ['Rest', `Interval with no counted step by either leg longer than \`rest.restGapS\` (${C.rest.restGapS} s).`],
+                ['Medio-lateral sway', '`(hipmid_x_px − calibration hipmid_x_px) × scale`, linearly detrended; RMS, range, path length (cm). Positive = toward the participant\'s left.'],
+                ['Trunk lateral lean', '`atan2(shoulder_mid.x − hip_mid.x, hip_mid.y − shoulder_mid.y)` degrees; positive = toward the participant\'s left.'],
+                ['Pelvis tilt', '`atan2(l_hip.y − r_hip.y, l_hip.x − r_hip.x)` degrees; positive = left hip lower.'],
+                ['Shoulder tilt', 'Same with shoulders.'],
+                ['Frontalness', '`|l_sh.x − r_sh.x| ÷ trunk length`; used for the facing check and `OBLIQUE_VIEW`.'],
+                ['Symmetry index', '`(R − L) ÷ mean(R, L) × 100`; positive = right greater.'],
+                ['3-D cross-check `p3d_s`', '`1 − (kneeW_y − hipW_y) ÷ S0w_s` from world landmarks; reported as mean |p − p3d| at counted peaks.'],
+                ['Effective fps', 'Frames processed by the pose model ÷ test window duration.'],
+                ['Norm classification', 'Rikli & Jones table lookup on `steps_right`; only if `valid_for_norm`.']
+            ].forEach(r => { d += `- **${r[0]}** — ${r[1]}\n`; });
+
+            // §8 QC flags
+            d += '\n## 8. Quality-control flags\n\n';
+            d += '`qc_flags` is a `;`-separated list. `qc_pass` is true when no **blocking** flag is present; blocking flags also withhold norm classification.\n\n';
+            d += '**Blocking:** ' + C.qc.blocking.map(f => '`' + f + '`').join(', ') + '\n\n';
+            d += '| Flag | Blocking | Trigger |\n|------|----------|---------|\n';
+            const flagTriggers = {
+                LOW_FPS: 'effective fps < ' + C.qc.minEffectiveFps,
+                LOW_VALID_FRAMES: 'valid-frame % < ' + C.qc.minValidFramePct,
+                TRACKING_GAPS: 'imputed % > ' + C.qc.maxImputedPct + ' or gap > ' + C.qc.maxGapS + ' s',
+                FEET_OUT_OF_FRAME: 'ankles/toes out of frame > ' + C.qc.maxFeetOutPct + ' % of frames',
+                CAMERA_OR_FEET_SHIFT: 'ankle/hip-mid drift beyond limit',
+                MANUAL_STOP: 'operator stopped early',
+                TAB_HIDDEN: 'tab backgrounded mid-test',
+                NO_STEPS: 'no counted steps',
+                CAL_NOT_STILL: 'calibration jitter > ' + C.calibration.maxJitterTrunkFrac,
+                HEIGHT_IMPLAUSIBLE: 'scale-derived height vs entered > ' + C.qc.maxHeightDiffPct + ' %',
+                BOTH_KNEES_UP: 'both knees ≥ countP > ' + C.qc.maxBothKneesUpPct + ' % of window',
+                OBLIQUE_VIEW: 'shoulder-width change > ' + C.qc.maxShoulderWidthChangePct + ' % from calibration',
+                SCALE_INCONSISTENT: 'scale plausibility check failed',
+                CAMERA_TILT: 'device pitch/roll > ' + C.camera.maxPitchDeg + '°',
+                CAMERA_HEIGHT_OFF: 'calibration hip-mid y outside [' + C.camera.hipYNormRange.join(', ') + ']',
+                LIFT_2D_3D_DISAGREE: 'mean |p − p3d| > ' + C.qc.maxLift2d3dDiff,
+                LONG_REST: 'resting > ' + C.qc.longRestPct + ' % of window',
+                CAL_FALLBACK: 'calibration fell back to auto-estimate',
+                SUPPORT_USED: 'operator declared support used'
+            };
+            Object.keys(flagTriggers).forEach(f => {
+                const blk = C.qc.blocking.indexOf(f) >= 0 ? 'yes' : 'no';
+                d += `| \`${f}\` | ${blk} | ${esc(flagTriggers[f])} |\n`;
+            });
+
+            // §9 Algorithm parameters (every CONFIG value)
+            d += '\n## 9. Algorithm parameters (CONFIG)\n\n';
+            d += 'Values marked `[TUNE]` in `config.js` are engineering defaults not yet validated against a criterion measure (see the pilot protocol).\n\n';
+            d += '| Path | Value |\n|------|-------|\n';
+            flatten(C, '').forEach(r => { d += `| \`${r.path}\` | ${esc(r.val)} |\n`; });
+
+            // §10 Limitations
+            d += '\n## 10. Limitations (frontal view)\n\n';
+            [
+                'No depth-based angles (hip/knee flexion, forward trunk lean, anteroposterior sway).',
+                'A thigh pointing at the camera is foreshortened and may add landmark jitter; only the vertical difference is used.',
+                'Camera height/tilt biases apparent knee height (a high camera under-counts, a low camera over-counts); mitigated by the S2 checks and recorded as covariates.',
+                'Knee occlusion by a hand, chair or loose clothing creates gaps at the apex.',
+                'The MediaPipe hip landmark is not the iliac crest, so the "hip level" rule approximates the Senior Fitness Test\'s patella–iliac-crest midpoint.',
+                'Thresholds marked [TUNE] are unvalidated; run the pilot before trusting absolute counts.',
+                'Not a medical device.'
+            ].forEach(x => d += '- ' + x + '\n');
+
+            // §11 References
+            d += '\n## 11. References\n\n';
+            [
+                'Rikli, R. E., & Jones, C. J. (1999). Functional fitness normative scores for community-residing older adults, ages 60–94. *Journal of Aging and Physical Activity, 7*(2), 162–181.',
+                'Jones, C. J., & Rikli, R. E. (2002). Measuring functional fitness of older adults. *The Journal on Active Aging*, March–April, 24–30.',
+                'Topend Sports. 2-Minute Step in Place Test. https://www.topendsports.com/testing/tests/step-in-place-2min.htm',
+                'Winter, D. A. (2009). *Biomechanics and motor control of human movement* (4th ed.). Wiley.',
+                'Bazarevsky, V., et al. (2020). BlazePose: On-device real-time body pose tracking. arXiv:2006.10204.',
+                'Needham, L., et al. (2021). The accuracy of several pose estimation methods for 3D joint centre localisation. *Scientific Reports, 11*, 20673.'
+            ].forEach(x => d += '- ' + x + '\n');
+
+            return d;
+        }
+
+        function byGroup(fields) {
+            // split into subsections by the `group` property, preserving order
+            const order = [];
+            const map = {};
+            fields.forEach(f => { if (!map[f.group]) { map[f.group] = []; order.push(f.group); } map[f.group].push(f); });
+            let out = '';
+            order.forEach(g => { out += groupTable(g, map[g]); });
+            return out;
+        }
+
+        function flatten(obj, prefix) {
+            const rows = [];
+            Object.keys(obj).forEach(k => {
+                const v = obj[k];
+                const path = prefix ? prefix + '.' + k : k;
+                if (v && typeof v === 'object' && !Array.isArray(v)) rows.push.apply(rows, flatten(v, path));
+                else rows.push({ path, val: Array.isArray(v) ? JSON.stringify(v) : String(v) });
+            });
+            return rows;
+        }
+
+        function show() { md = build(); document.getElementById('out').textContent = md; }
+        document.getElementById('gen').onclick = show;
+        document.getElementById('dl').onclick = function () {
+            if (!md) show();
+            const blob = new Blob([md], { type: 'text/markdown' });
+            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'DATA_DICTIONARY.md';
+            document.body.appendChild(a); a.click(); setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 500);
+        };
+        document.getElementById('copy').onclick = function () {
+            if (!md) show();
+            navigator.clipboard && navigator.clipboard.writeText(md);
+        };
+        show();
+    })();
+    </script>
+</body>
+</html>

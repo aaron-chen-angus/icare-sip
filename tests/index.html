@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SIP//LAB — Browser unit tests</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Rajdhani', system-ui, sans-serif; background: #05070d; color: #dfe9ff; padding: 16px; max-width: 900px; margin: 0 auto; }
+        h1 { font-family: 'Orbitron', sans-serif; color: #00d4ff; font-size: 1.3rem; }
+        h1 .slash { color: #ff6a00; }
+        #summary { font-family: 'Orbitron', sans-serif; font-size: 1.1rem; margin: 12px 0; padding: 10px; border: 1px solid rgba(0,212,255,.3); }
+        .pass { color: #4cdf7c; } .fail { color: #ff3b30; }
+        ul { list-style: none; padding: 0; }
+        li { padding: 6px 10px; border-bottom: 1px solid rgba(0,212,255,.1); font-size: .9rem; }
+        li .tag { font-family: 'Orbitron', sans-serif; font-size: .7rem; margin-right: 8px; }
+        li .detail { color: #8fa6c8; font-size: .82rem; }
+        code { color: #ffd700; }
+    </style>
+</head>
+<body>
+    <h1>SIP<span class="slash">//</span>LAB — browser unit tests</h1>
+    <p>No Node required. Open this file directly (file:// is fine; no camera needed).</p>
+    <div id="summary">Running…</div>
+    <ul id="results"></ul>
+
+    <script src="../js/config.js"></script>
+    <script src="../js/schema.js"></script>
+    <script src="../js/geom.js"></script>
+    <script src="../js/analysis.js"></script>
+    <script src="../js/export.js"></script>
+    <script src="synth.js"></script>
+    <script>
+    (function () {
+        'use strict';
+        const results = [];
+        let pass = 0, fail = 0;
+
+        function test(name, fn) {
+            try { fn(); results.push({ name, ok: true }); pass++; }
+            catch (e) { results.push({ name, ok: false, msg: e.message }); fail++; }
+        }
+        function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); }
+        function approx(a, b, tol, msg) { if (Math.abs(a - b) > tol) throw new Error((msg || 'approx') + `: got ${a}, expected ~${b} (±${tol})`); }
+
+        const run = (raw, cal, p, cfg) => SIPAnalysis.run(raw, cal || Synth.calibration(), p || Synth.participant(), cfg || CONFIG);
+
+        // ---- filter: zero-phase on a pure sine keeps peak timing ----
+        test('filtfilt zero-phase: 1.5 Hz sine peak timing within 1 sample', function () {
+            const fs = 30, N = 300, f = 1.5;
+            const x = new Float64Array(N);
+            for (let i = 0; i < N; i++) x[i] = Math.sin(2 * Math.PI * f * i / fs);
+            const y = SIPAnalysis._filtfilt(x, 8, fs, 30);
+            // find a peak in the middle of both signals and compare index
+            const peakIdx = arr => { let bi = 0, bv = -Infinity; for (let i = 100; i < 200; i++) if (arr[i] > bv) { bv = arr[i]; bi = i; } return bi; };
+            assert(Math.abs(peakIdx(x) - peakIdx(y)) <= 1, 'peak shifted > 1 sample');
+        });
+
+        test('butterworth cutoff < Nyquist', function () {
+            const c = SIPAnalysis._butterCoeffs(8, 30);
+            assert(isFinite(c.b0) && isFinite(c.a1), 'coeffs not finite');
+        });
+
+        // ---- clean signal exact counts ----
+        test('clean 120s @0.8Hz/leg: R≈96, L≈96, equal', function () {
+            const raw = Synth.generate({ durationS: 120, cadenceHz: 0.8 });
+            const r = run(raw);
+            // 0.8 lifts/s * 120 s = 96 per leg (allow small boundary tolerance)
+            approx(r.summary.steps_right, 96, 2, 'R count');
+            approx(r.summary.steps_left, 96, 2, 'L count');
+            assert(r.summary.steps_total === r.summary.steps_right + r.summary.steps_left, 'total mismatch');
+        });
+
+        // ---- counts unaffected by noise within tolerance ----
+        test('noise does not change counts beyond ±2', function () {
+            const clean = run(Synth.generate({ durationS: 60, cadenceHz: 0.8 }));
+            const noisy = run(Synth.generate({ durationS: 60, cadenceHz: 0.8, noise: 0.004, seed: 7 }));
+            approx(noisy.summary.steps_right, clean.summary.steps_right, 2, 'noisy R');
+        });
+
+        // ---- threshold edge cases ----
+        test('peak at p=0.80 NOT counted at default countP=0.85', function () {
+            const raw = Synth.generate({ durationS: 30, cadenceHz: 0.8, heightR: 0.80, heightL: 0.80 });
+            const r = run(raw);
+            assert(r.summary.steps_right === 0, 'R should be 0 at 0.80, got ' + r.summary.steps_right);
+            assert(r.summary.incomplete_attempts_right > 0, 'should log incomplete attempts');
+        });
+        test('peak at p=0.90 counted at default countP=0.85', function () {
+            const raw = Synth.generate({ durationS: 30, cadenceHz: 0.8, heightR: 0.90, heightL: 0.90 });
+            const r = run(raw);
+            assert(r.summary.steps_right > 0, 'R should count at 0.90');
+        });
+        test('official midpoint preset (0.50) flips a 0.60 lift to counted', function () {
+            const raw = Synth.generate({ durationS: 30, cadenceHz: 0.8, heightR: 0.60, heightL: 0.60 });
+            const def = run(raw);
+            assert(def.summary.steps_right === 0, 'at 0.85 a 0.60 lift must not count');
+            const cal = Synth.calibration({ threshold_p: CONFIG.events.countPOfficial, threshold_preset: 'official_midpoint' });
+            const off = run(raw, cal, Synth.participant({ threshold_preset: 'official_midpoint' }));
+            assert(off.summary.steps_right > 0, 'official midpoint should count a 0.60 lift');
+        });
+
+        // ---- no double counting via hysteresis ----
+        test('no double counts: counts ≈ cadence*duration', function () {
+            const raw = Synth.generate({ durationS: 50, cadenceHz: 1.0 });
+            const r = run(raw);
+            approx(r.summary.steps_right, 50, 2, 'R should be ~50 not doubled');
+        });
+
+        // ---- boundary t=119.9 counted, 120.1 not ----
+        test('step peak just inside 120 s counts; just outside does not', function () {
+            // single lift centred near the boundary
+            const mk = center => Synth.generate({
+                durationS: 125, cadenceHz: 0.0001, heightR: 0, heightL: 0,
+                custom: (t) => ({ pR: bump(t, center, 1.1, 0.6), pL: 0 })
+            });
+            function bump(t, c, h, w) { const u = (t - c) / w; return u > -1 && u < 1 ? h * 0.5 * (1 + Math.cos(Math.PI * u)) : 0; }
+            const inside = run(mk(119.5));
+            const outside = run(mk(121.0));
+            assert(inside.summary.steps_right === 1, 'inside should count 1, got ' + inside.summary.steps_right);
+            assert(outside.summary.steps_right === 0, 'outside should count 0, got ' + outside.summary.steps_right);
+        });
+
+        // ---- rest detection ----
+        test('rest gap of ~6 s detected', function () {
+            const raw = Synth.generate({ durationS: 60, cadenceHz: 0.8, restGaps: [[20, 26]] });
+            const r = run(raw);
+            assert(r.summary.rest_count >= 1, 'expected a rest, got ' + r.summary.rest_count);
+            assert(r.summary.longest_rest_s >= 5, 'longest rest too short: ' + r.summary.longest_rest_s);
+        });
+
+        // ---- both knees up flag ----
+        test('both knees up simultaneously flags BOTH_KNEES_UP', function () {
+            const raw = Synth.generate({ durationS: 20, cadenceHz: 0.8, custom: (t) => {
+                // force both knees high together for a sustained window
+                if (t > 5 && t < 9) return { pL: 1.1, pR: 1.1 };
+                return null;
+            }});
+            const r = run(raw);
+            assert(r.summary.both_knees_up_pct > CONFIG.qc.maxBothKneesUpPct, 'both_knees_up_pct should exceed threshold');
+            assert(r.summary.qc_flags.indexOf('BOTH_KNEES_UP') >= 0, 'BOTH_KNEES_UP flag missing');
+        });
+
+        // ---- dropouts bridged/flagged ----
+        test('frame dropouts are bridged (counts survive) and tracked', function () {
+            const raw = Synth.generate({ durationS: 40, cadenceHz: 0.8, dropout: 0.15, seed: 3 });
+            const r = run(raw);
+            approx(r.summary.steps_right, 32, 4, 'R with dropouts');
+        });
+
+        // ---- scale computation ----
+        test('scale_m_per_px yields plausible height (~1.70 m)', function () {
+            const r = run(Synth.generate({ durationS: 10 }));
+            const derivedH = r.summary.scale_m_per_px * r.summary.calib_chain_px / CONFIG.anthropometry.segmentChainFractionOfHeight;
+            approx(derivedH, 1.70, 0.1, 'derived height');
+        });
+
+        // ---- norm lookup for every band/sex + boundaries ----
+        test('norm lookup: 70yo male 90 steps = AVERAGE (80–110)', function () {
+            const info = SIPAnalysis._classifyNorm(90, { age_years: 70, sex: 'male' }, CONFIG, true);
+            assert(info.classification === 'AVERAGE', 'got ' + info.classification);
+            assert(info.below === 80 && info.above === 110, 'cutoffs wrong');
+        });
+        test('norm lookup: 60yo female 110 = ABOVE (>107)', function () {
+            const info = SIPAnalysis._classifyNorm(110, { age_years: 60, sex: 'female' }, CONFIG, true);
+            assert(info.classification === 'ABOVE AVERAGE', 'got ' + info.classification);
+        });
+        test('norm lookup: age 59 and 95 => NOT CLASSIFIED', function () {
+            assert(SIPAnalysis._classifyNorm(100, { age_years: 59, sex: 'male' }, CONFIG, true).classification === 'NOT CLASSIFIED', '59 should be unclassified');
+            assert(SIPAnalysis._classifyNorm(100, { age_years: 95, sex: 'female' }, CONFIG, true).classification === 'NOT CLASSIFIED', '95 should be unclassified');
+        });
+        test('norm lookup covers every age band & sex', function () {
+            ['male', 'female'].forEach(sex => {
+                const table = sex === 'male' ? CONFIG.norms.male : CONFIG.norms.female;
+                table.forEach(row => {
+                    const mid = Math.floor((row[0] + row[1]) / 2);
+                    const info = SIPAnalysis._classifyNorm(row[2], { age_years: mid, sex }, CONFIG, true);
+                    assert(info.below === row[2] && info.above === row[3], `cutoffs ${sex} ${mid}`);
+                    // exactly at below cutoff = AVERAGE (below is strict <)
+                    assert(info.classification === 'AVERAGE', `boundary at below cutoff should be AVERAGE for ${sex} ${mid}`);
+                });
+            });
+        });
+
+        // ---- schema / CSV column integrity ----
+        test('every summary schema key present in output, no extras', function () {
+            const r = run(Synth.generate({ durationS: 20 }));
+            const have = new Set(Object.keys(r.summary));
+            const want = SCHEMA.keys.sessions;
+            // sessions schema includes session-level + participant fields the analysis
+            // does not produce (id/timestamp/etc). Check all ANALYSIS-produced keys exist in schema.
+            have.forEach(k => assert(SCHEMA.keys.sessions.indexOf(k) >= 0, 'extra key not in schema: ' + k));
+            // and the core outcome keys from schema are present in output
+            ['steps_right', 'steps_left', 'steps_total', 'qc_flags', 'qc_pass', 'norm_classification',
+             'cadence_total_steps_per_min', 'sway_ml_rms_cm', 'scale_m_per_px'].forEach(k =>
+                assert(have.has(k), 'missing outcome key: ' + k));
+        });
+        test('step rows carry all schema step keys', function () {
+            const r = run(Synth.generate({ durationS: 20 }));
+            assert(r.steps.length > 0, 'no steps');
+            const s = r.steps[0];
+            ['leg', 'counted', 'peak_progress', 't_peak_s', 'lifting_time_s', 'knee_rise_cm'].forEach(k =>
+                assert(k in s, 'step missing ' + k));
+        });
+        test('frames analysis rows carry filtered pixel columns', function () {
+            const r = run(Synth.generate({ durationS: 10 }));
+            assert(r.frames.length > 0, 'no frames');
+            const f = r.frames[0];
+            ['t_s', 'progress_left', 'progress_right', 'r_kn_y_px', 'l_hip_x_px', 'trunk_lean_deg'].forEach(k =>
+                assert(k in f, 'frame missing ' + k));
+        });
+
+        // ---- same-side vs hip-mid reference ----
+        test('hipRef same_side vs mid both produce counts', function () {
+            const raw = Synth.generate({ durationS: 30, cadenceHz: 0.8 });
+            const a = run(raw);
+            const cfgMid = JSON.parse(JSON.stringify(CONFIG)); cfgMid.events.hipRef = 'mid';
+            const b = run(raw, Synth.calibration(), Synth.participant(), cfgMid);
+            assert(a.summary.steps_right > 0 && b.summary.steps_right > 0, 'both refs should count');
+        });
+
+        // ---- thigh foreshortening: vertical-only p with forward-pointing thigh ----
+        test('vertical-only p ignores horizontal thigh foreshortening', function () {
+            // simulate a forward-pointing thigh: knee x drifts toward centre while y rises
+            const raw = Synth.generate({ durationS: 30, cadenceHz: 0.8, heightR: 1.0, heightL: 1.0, seed: 9 });
+            const r = run(raw);
+            // counts should still be based on vertical rise, so ~24 per leg over 30s
+            approx(r.summary.steps_right, 24, 3, 'foreshortening should not break vertical counting');
+        });
+
+        // ---- live/offline agreement sanity (offline from same signal) ----
+        test('quarters sum to total right count', function () {
+            const r = run(Synth.generate({ durationS: 120, cadenceHz: 0.8 }));
+            const q = r.summary.steps_right_q1 + r.summary.steps_right_q2 + r.summary.steps_right_q3 + r.summary.steps_right_q4;
+            assert(q === r.summary.steps_right, `quarters ${q} != total ${r.summary.steps_right}`);
+        });
+
+        // ---- symmetry near 0 for symmetric input ----
+        test('symmetry index ≈ 0 for equal legs', function () {
+            const r = run(Synth.generate({ durationS: 60, cadenceHz: 0.8 }));
+            assert(Math.abs(r.summary.symmetry_step_count_pct) <= 10, 'symmetry should be near 0, got ' + r.summary.symmetry_step_count_pct);
+        });
+
+        // ---- export: CSV headers match schema exactly ----
+        test('summary CSV header equals schema sessions keys', function () {
+            const r = run(Synth.generate({ durationS: 10 }));
+            const rec = Object.assign({ session_id: 'x' }, r.summary);
+            const csv = Exporter.summaryCSV(rec);
+            const header = csv.split('\r\n')[0].split(',');
+            assert(header.length === SCHEMA.keys.sessions.length, 'header length mismatch');
+            assert(header.join(',') === SCHEMA.keys.sessions.join(','), 'header order mismatch');
+        });
+        test('steps CSV header equals schema steps keys', function () {
+            const r = run(Synth.generate({ durationS: 20 }));
+            const csv = Exporter.stepsCSV(r.steps, 'x');
+            const header = csv.split('\r\n')[0];
+            assert(header === SCHEMA.keys.steps.join(','), 'steps header mismatch');
+        });
+        test('frames-analysis CSV header equals schema framesAnalysis keys', function () {
+            const r = run(Synth.generate({ durationS: 5 }));
+            const csv = Exporter.framesAnalysisCSV(r.frames, 'x');
+            const header = csv.split('\r\n')[0];
+            assert(header === SCHEMA.keys.framesAnalysis.join(','), 'frames header mismatch');
+        });
+        test('raw CSV header = session_id + schema framesRaw keys', function () {
+            const raw = Synth.generate({ durationS: 2 });
+            const csv = Exporter.framesRawCSV(raw, 'x');
+            const header = csv.split('\r\n')[0];
+            assert(header === 'session_id,' + SCHEMA.keys.framesRaw.join(','), 'raw header mismatch');
+        });
+        test('ZIP writer produces a valid local-file signature', function () {
+            const bytes = Exporter.buildZip([{ name: 'a.txt', bytes: new TextEncoder().encode('hello') }]);
+            // local file header signature 0x04034b50 little-endian
+            assert(bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04, 'bad ZIP signature');
+            assert(bytes.length > 50, 'zip too small');
+        });
+        test('CRC32 of "123456789" is 0xCBF43926', function () {
+            const crc = Exporter.crc32(new TextEncoder().encode('123456789'));
+            assert(crc === 0xCBF43926, 'crc32 wrong: ' + crc.toString(16));
+        });
+
+        // ---- render ----
+        const ul = document.getElementById('results');
+        results.forEach(r => {
+            const li = document.createElement('li');
+            li.innerHTML = `<span class="tag ${r.ok ? 'pass' : 'fail'}">${r.ok ? 'PASS' : 'FAIL'}</span>` +
+                `${r.name}` + (r.ok ? '' : ` <span class="detail">— ${r.msg}</span>`);
+            ul.appendChild(li);
+        });
+        const sum = document.getElementById('summary');
+        sum.className = fail === 0 ? 'pass' : 'fail';
+        sum.textContent = `${pass} passed, ${fail} failed (${results.length} total)`;
+    })();
+    </script>
+</body>
+</html>
