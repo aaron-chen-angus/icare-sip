@@ -163,20 +163,26 @@
         const below = dom.below;
         below.innerHTML = '';
 
-        // frame-fit checklist
+        // frame-fit checklist. Required = must be green to calibrate/START.
+        // Advisory = guidance only (recorded as covariates), never blocks START.
         const checklist = el('ul', { class: 'checklist', id: 's2-checklist', style: 'margin:10px' });
         const items = [
-            ['face', 'Face visible'], ['shoulders', 'Shoulders'], ['hips', 'Hips'], ['knees', 'Knees'],
-            ['feet', 'Both feet in frame'], ['distance', 'Distance OK'], ['facing', 'Facing camera'],
-            ['level', 'Camera level'], ['hipHeight', 'Camera at hip height'], ['still', 'Image still']
+            ['face', 'Face visible', true], ['shoulders', 'Shoulders', true],
+            ['hips', 'Hips', true], ['knees', 'Knees', true], ['feet', 'Both feet in frame', true],
+            ['distance', 'Distance OK', false], ['facing', 'Facing camera', false],
+            ['level', 'Camera level', false], ['hipHeight', 'Camera at hip height', false],
+            ['still', 'Calibrated', true]
         ];
-        items.forEach(([k, label]) => {
+        items.forEach(([k, label, required]) => {
             checklist.appendChild(el('li', { id: 'chk-' + k }, [
-                el('span', { class: 'tick' }), el('span', { text: label })
+                el('span', { class: 'tick' }),
+                el('span', { text: label + (required ? '' : ' (advisory)') })
             ]));
         });
         below.appendChild(el('div', { class: 'panel', style: 'margin:10px' }, [
-            el('h3', { text: 'Frame-fit & camera checks' }), checklist
+            el('h3', { text: 'Frame-fit & camera checks' }),
+            el('p', { class: 'status', style: 'margin-bottom:6px', text: 'Required checks + a 2-second still calibration enable START. "Advisory" items only guide setup.' }),
+            checklist
         ]));
 
         // controls: overrides + recalibrate + START
@@ -225,8 +231,11 @@
         const [smin, smax] = C.camera.spanRange;
         checks.distance = span >= smin && span <= smax;
 
+        // Facing: rely on shoulder ORDER (the reliable signal); frontalness is only a
+        // soft hint. Being lenient here is intentional — a too-strict facing/frontalness
+        // test can never pass for normal anatomy and would wedge the whole screen.
         const facing = Geom.facingCamera(img, vw, vh, C.camera.minFrontalness);
-        checks.facing = facing.ok || overrides.facing;
+        checks.facing = facing.orderOk || overrides.facing;
 
         // camera level from device sensors (fallback: ankle-mid->shoulder-mid axis vs vertical)
         const levelOk = cameraLevelOk(img, vw, vh);
@@ -237,13 +246,14 @@
         const [hlo, hhi] = C.camera.hipYNormRange;
         checks.hipHeight = (hipMid.y >= hlo && hipMid.y <= hhi) || overrides.hipHeight;
 
-        // --- coaching text (priority order) ---
+        // --- coaching text (priority order). Advisory checks (facing/level/hip/distance)
+        // guide the operator but DO NOT block START; only core tracking + calibration do. ---
         let msg = null, cls = 'warn';
-        if (!checks.face || !checks.shoulders || !checks.hips) msg = 'STEP INTO FRAME';
+        if (!checks.face || !checks.shoulders || !checks.hips || !checks.knees) msg = 'STEP INTO FRAME';
         else if (!checks.feet) msg = 'BOTH FEET MUST BE IN FRAME';
         else if (span > smax) msg = 'STEP BACK';
         else if (span < smin) msg = 'STEP CLOSER';
-        else if (!facing.ok && !overrides.facing) msg = 'FACE THE CAMERA';
+        else if (!facing.orderOk && !overrides.facing) msg = 'FACE THE CAMERA';
         else if (!levelOk && !overrides.level) msg = 'TILT PHONE UPRIGHT';
         else if (hipMid.y > hhi && !overrides.hipHeight) msg = 'LOWER THE PHONE';
         else if (hipMid.y < hlo && !overrides.hipHeight) msg = 'RAISE THE PHONE';
@@ -270,9 +280,10 @@
         setGaugeFill(dom.gaugeR, clamp01(live.pEma.r / 1.2));
 
         // --- stillness + auto calibration ---
-        const frameFitOk = checks.face && checks.shoulders && checks.hips && checks.knees &&
-            checks.feet && checks.distance && checks.facing && checks.level && checks.hipHeight;
-        handleCalibration(img, vw, vh, tMs, frameFitOk);
+        // Calibrate as soon as the body + feet are tracked. Facing/level/hip-height are
+        // advisory and must not block calibration (they still guide the operator).
+        const coreFitOk = checks.face && checks.shoulders && checks.hips && checks.knees && checks.feet;
+        handleCalibration(img, vw, vh, tMs, coreFitOk);
 
         renderChecklist();
         updateDiag(img, vw, vh, facing);
@@ -410,11 +421,12 @@
     function updateStartButton() {
         const btn = document.getElementById('btn-start');
         if (!btn) return;
-        const allChecks = checks.face && checks.shoulders && checks.hips && checks.knees &&
-            checks.feet && checks.distance && checks.facing && checks.level && checks.hipHeight;
-        const ready = allChecks && calib.done;
+        // START needs the body tracked + a completed calibration. Facing/level/hip-height
+        // are advisory (they are recorded as QC covariates, not hard gates).
+        const coreFitOk = checks.face && checks.shoulders && checks.hips && checks.knees && checks.feet;
+        const ready = coreFitOk && calib.done;
         btn.disabled = !ready;
-        btn.textContent = ready ? 'Start Test →' : 'Start Test (complete checks)';
+        btn.textContent = ready ? 'Start Test →' : 'Start Test (stand still to calibrate)';
     }
 
     function onStartTest() {

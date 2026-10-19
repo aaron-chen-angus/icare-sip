@@ -56,11 +56,13 @@ const CONFIG = {
     },
 
     // Camera / frontal-setup gates (S2). See brief B2a.
+    // These are ADVISORY in the UI (they guide the operator and are recorded as QC
+    // covariates) — they do not hard-block START. Calibration + body tracking do.
     camera: {
-        maxPitchDeg: 5,             // [TUNE] device pitch/roll tolerance from upright
-        hipYNormRange: [0.35, 0.65],// [TUNE] acceptable median hip-mid y (video-native normalised)
-        minFrontalness: 0.8,        // [TUNE] shoulder_width / trunk_length to count as "facing camera"
-        spanRange: [0.65, 0.90],    // head-to-ankle span as fraction of frame height
+        maxPitchDeg: 8,             // [TUNE] device pitch/roll tolerance from upright
+        hipYNormRange: [0.30, 0.70],// [TUNE] acceptable median hip-mid y (video-native normalised)
+        minFrontalness: 0.33,       // [TUNE] shoulder_width / trunk_length hint for "facing" (real anatomy ~0.4-0.7)
+        spanRange: [0.45, 0.98],    // head-to-ankle span as fraction of frame height (lenient)
         defaultFacing: 'environment'// rear camera default (operator-assisted); 'user' = front/selfie
     },
 
@@ -95,7 +97,7 @@ const CONFIG = {
     // Calibration (stand-still hold).
     calibration: {
         holdS: 2.0,
-        maxJitterTrunkFrac: 0.04,   // [TUNE] max SD of hip-mid/ankle during hold, trunk fraction
+        maxJitterTrunkFrac: 0.12,   // [TUNE] max SD of hip-mid/ankle during hold, trunk fraction (lenient so normal standing passes)
         heightRangeCm: [120, 210],
         fallbackWindowS: 10         // if calibration skipped: median of lowest-knee frames in first 10 s
     },

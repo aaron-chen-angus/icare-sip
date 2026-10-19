@@ -201,6 +201,9 @@ body.live .tron-bg { display: none; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .check { display: flex; gap: 10px; align-items: flex-start; font-size: .86rem; color: var(--text); margin: 10px 0; text-align: left; }
 .check input { margin-top: 3px; width: 18px; height: 18px; flex: none; accent-color: var(--orange); }
+/* optional covariate checkbox — dimmed amber so operators don't tick it by reflex */
+.check.check-covariate { color: var(--amber); opacity: .85; font-style: italic; }
+.check.check-covariate input { accent-color: var(--amber); }
 .err { color: var(--red); font-size: .85rem; min-height: 1.2em; }
 
 /* ----------------------------------------------------------------- language selector + video */

@@ -140,12 +140,17 @@
         // participant form
         screen.appendChild(renderForm());
 
-        // PROCEED lives at the BOTTOM, after the form (hidden until a language is chosen)
+        // PROCEED lives at the BOTTOM, after the form (hidden until a language is chosen).
+        // "Cannot do test" is a SEPARATE action, visually distinct, never part of the checklist.
         const proceedWrap = el('div', { id: 'proceed-wrap', style: 'display:none;margin-top:4px' }, [
             el('button', {
                 class: 'btn btn-primary btn-large', type: 'button', id: 'proceed-btn',
                 onclick: onProceed
-            }, 'Proceed to Test →')
+            }, 'Proceed to Test →'),
+            el('button', {
+                class: 'btn btn-danger', type: 'button', id: 'cannot-btn',
+                style: 'width:100%;margin-top:10px', onclick: onCannotDoTest
+            }, 'Cannot do test (record 0)')
         ]);
         screen.appendChild(proceedWrap);
 
@@ -311,8 +316,7 @@
             </div>
             <label class="check"><input type="checkbox" id="c-safety"> <span>Safety: participant is fit for the test and supervised.</span></label>
             <label class="check"><input type="checkbox" id="c-briefed"> <span>Protocol briefed: marching, knee height, rest allowed.</span></label>
-            <label class="check"><input type="checkbox" id="c-support"> <span>Support used (wall/chair) — optional covariate, not penalised.</span></label>
-            <label class="check"><input type="checkbox" id="c-unable"> <span>Unable to perform — records 0 and skips the camera.</span></label>
+            <label class="check check-covariate"><input type="checkbox" id="c-support"> <span>Support used (wall/chair) — optional covariate, not penalised.</span></label>
             ${sheetsConfigured ? '<label class="check"><input type="checkbox" id="c-consent"> <span>Consent to upload anonymised numeric results to the research sheet.</span></label>' : ''}
             <div class="err" id="err-checks"></div>
             <details class="more-info">
@@ -343,7 +347,7 @@
             safety: c('c-safety'),
             protocol_briefed: c('c-briefed'),
             support_used: c('c-support'),
-            unable_to_perform: c('c-unable'),
+            unable_to_perform: false,   // set only via the separate "Cannot do test" button
             consent_upload: c('c-consent')
         };
     }
@@ -392,21 +396,27 @@
             return;
         }
         state.participant = v;
+        App.toS2(v);
+    }
 
-        // Only the explicitly-ticked "Unable to perform" checkbox records a 0 and skips
-        // the camera — and we confirm first so it can never happen by accident.
-        if (v.unable_to_perform === true) {
-            modal({
-                title: 'Record 0 and skip the camera?',
-                body: 'The "Unable to perform" box is ticked. This records <b>0 steps</b> and does not open the camera. Continue?',
-                buttons: [
-                    { label: 'Cancel', class: 'btn', onClick: c => c() },
-                    { label: 'Record 0', class: 'btn btn-danger', onClick: c => { c(); App.toUnableResult(v); } }
-                ]
-            });
+    // Separate, deliberate action — only an ID is required, then a confirmation.
+    function onCannotDoTest() {
+        const v = readForm();
+        clearErrors();
+        if (!v.participant_id) {
+            const n = document.getElementById('err-pid');
+            if (n) { n.textContent = 'Participant ID is required.'; n.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
             return;
         }
-        App.toS2(v);
+        v.unable_to_perform = true;
+        modal({
+            title: 'Cannot do test?',
+            body: `Record <b>0 steps</b> for <b>${esc(v.participant_id)}</b> and skip the camera?`,
+            buttons: [
+                { label: 'Cancel', class: 'btn', onClick: c => c() },
+                { label: 'Record 0', class: 'btn btn-danger', onClick: c => { c(); state.participant = v; App.toUnableResult(v); } }
+            ]
+        });
     }
 
     // ---- orientation handling ------------------------------------------------
