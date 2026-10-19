@@ -76,16 +76,20 @@ const CONFIG = {
     },
 
     // Knee-lift event detection on progress p(t): 0 standing, 1 knee at hip level.
+    // Counting is deliberately LENIENT: a rep is any clear knee raise, not "knee at
+    // hip level". Height is still measured and reported (knee_rise_cm, % hip level,
+    // peak progress) but does NOT gate the count. This matches the operator's intent:
+    // count every march step; report how high separately.
     events: {
-        countP: 0.85,           // [TUNE] default "a little at hip level" counts
-        countPOfficial: 0.50,   // "official midpoint" preset (patella-iliac-crest midpoint)
-        releaseP: 0.55,         // [TUNE] hysteresis: must fall below this before next count
-        lowP: 0.15,             // onset/offset timing level
-        minSameLegS: 0.25,      // minimum same-leg inter-step time
+        countP: 0.33,           // [TUNE] knee raised ~1/3 of thigh length counts a rep
+        countPOfficial: 0.50,   // "official midpoint" preset (stricter, patella-iliac-crest midpoint)
+        releaseP: 0.18,         // [TUNE] hysteresis: knee must come back down below this to re-arm
+        lowP: 0.10,             // onset/offset timing level
+        minSameLegS: 0.25,      // minimum same-leg inter-step time (anti double-count)
         bothKneesMaxS: 0.2,     // both knees >= countP longer than this => BOTH_KNEES_UP
-        minProminence: 0.2,     // [TUNE] min peak prominence for offline local-maxima detection
+        minProminence: 0.12,    // [TUNE] min peak prominence for offline local-maxima detection
         maxP: 2.0,              // p above this is an artefact and discarded
-        hipRef: 'same_side',    // 'same_side' | 'mid' (hip midpoint; use if pelvic hiking dominates)
+        hipRef: 'mid',          // 'mid' = hip midpoint (robust to per-side hip jitter) | 'same_side'
         gapPeakPolicy: 'flag'   // 'flag' = count across a low-visibility apex but flag the step
     },
 
@@ -105,22 +109,24 @@ const CONFIG = {
     // Whole-body anthropometry (Winter, 2009): shoulder->hip->knee->ankle chain = 0.779 H.
     anthropometry: { segmentChainFractionOfHeight: 0.779 },
 
-    // Quality control thresholds.
+    // Quality control thresholds. Deliberately tolerant: QC should flag genuinely bad
+    // recordings, not routine phone-camera noise. Most flags are advisory (non-blocking)
+    // so a usable test still classifies against norms.
     qc: {
-        minEffectiveFps: 15,
-        minValidFramePct: 90,
-        maxImputedPct: 10,
-        maxGapS: 0.5,
-        maxFeetOutPct: 5,
-        maxShoulderWidthChangePct: 25,  // OBLIQUE_VIEW (non-blocking)
-        maxHeightDiffPct: 15,           // scale-derived height vs entered
-        maxBothKneesUpPct: 5,
-        maxLift2d3dDiff: 0.25,
-        longRestPct: 20,
-        // Blocking flags withhold norm classification.
-        blocking: ['LOW_FPS', 'LOW_VALID_FRAMES', 'TRACKING_GAPS', 'FEET_OUT_OF_FRAME',
-                   'CAMERA_OR_FEET_SHIFT', 'MANUAL_STOP', 'TAB_HIDDEN', 'NO_STEPS',
-                   'CAL_NOT_STILL', 'HEIGHT_IMPLAUSIBLE', 'BOTH_KNEES_UP']
+        minEffectiveFps: 10,
+        minValidFramePct: 70,
+        maxImputedPct: 35,
+        maxGapS: 1.5,
+        maxFeetOutPct: 35,
+        maxShoulderWidthChangePct: 45,  // OBLIQUE_VIEW (non-blocking)
+        maxHeightDiffPct: 40,           // scale-derived height vs entered
+        maxBothKneesUpPct: 20,
+        maxLift2d3dDiff: 0.6,
+        maxCameraFeetShift: 0.25,       // normalised; camera/feet drift before flagging
+        longRestPct: 40,
+        // Only truly test-invalidating conditions block norm classification.
+        // Framing/tracking flags are advisory so a usable test still classifies.
+        blocking: ['MANUAL_STOP', 'TAB_HIDDEN', 'NO_STEPS']
     },
 
     // Live (causal) counter during the test; the offline analysis is authoritative.

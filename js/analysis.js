@@ -696,8 +696,9 @@
             const rshift = Math.abs(rs.series.r_an.x[i] - cal.ankle_r_x);
             maxShift = Math.max(maxShift, lshift, rshift);
         }
-        // shift beyond ~12% of frame width = suspicious walking/camera move
-        return maxShift > 0.12;
+        // shift beyond the configured fraction of frame width = suspicious move
+        const lim = (CONFIG.qc && CONFIG.qc.maxCameraFeetShift) || 0.25;
+        return maxShift > lim;
     }
 
     // ---------- norms ----------
