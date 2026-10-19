@@ -347,19 +347,23 @@
         const recent = calib.samples.filter(s => tMs - s.tMs <= holdMs);
         if (recent.length < 5) { checks.still = false; setCalibProgress(recent.length / 10); return; }
 
+        // Jitter is RECORDED as a QC covariate but does NOT gate completion — a person
+        // can never hold perfectly still, and gating on it wedges the whole screen.
+        // (hipMidX/hipMidY/lanX samples are already in PIXELS; do not multiply by vw again.)
         const trunkMean = mean(recent.map(s => s.trunk)) || 1;
         const jitter = (sd(recent.map(s => s.hipMidX)) + sd(recent.map(s => s.hipMidY)) +
-            sd(recent.map(s => s.lanX * vw)) ) / 3 / trunkMean;
-        checks.still = jitter <= C.calibration.maxJitterTrunkFrac;
+            sd(recent.map(s => s.lanX))) / 3 / trunkMean;
+        calib.lastJitter = jitter;
 
         const elapsed = tMs - calib.startMs;
         setCalibProgress(clamp01(elapsed / holdMs));
 
-        if (elapsed >= holdMs && checks.still) finishCalibration(recent, vw, vh);
+        // Complete purely on elapsed time: hold the body in frame for holdS seconds.
+        if (elapsed >= holdMs) finishCalibration(recent, vw, vh);
     }
 
     function startCalibration() {
-        calib.active = true; calib.done = false; calib.result = null;
+        calib.active = true; calib.done = false; calib.result = null; calib.lastJitter = null;
         calib.startMs = live.lastTMs || performance.now();
         calib.samples = [];
         const note = document.getElementById('s2-note');
@@ -385,7 +389,8 @@
             hip_y_norm: median(recent.map(s => s.hipYNorm)),
             ankle_l_x: median(recent.map(s => s.lanX)), ankle_r_x: median(recent.map(s => s.ranX)),
             frontalness: median(recent.map(s => s.front)),
-            jitter: (sd(recent.map(s => s.hipMidX)) + sd(recent.map(s => s.hipMidY))) / 2 / (median(recent.map(s => s.trunk)) || 1),
+            jitter: calib.lastJitter != null ? calib.lastJitter
+                : (sd(recent.map(s => s.hipMidX)) + sd(recent.map(s => s.hipMidY))) / 2 / (median(recent.map(s => s.trunk)) || 1),
             hold_s: C.calibration.holdS,
             camera_pitch_deg: orient.pitch, camera_roll_deg: orient.roll,
             vw, vh
@@ -393,6 +398,7 @@
         calib.result = result;
         calib.done = true;
         calib.active = false;
+        checks.still = true;
         hideCalibBar();
         // feed s0guess from the real calibration so gauges are accurate
         s0guess.l = S0_L; s0guess.r = S0_R;
