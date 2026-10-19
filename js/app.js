@@ -140,12 +140,23 @@
         // participant form
         screen.appendChild(renderForm());
 
+        // PROCEED lives at the BOTTOM, after the form (hidden until a language is chosen)
+        const proceedWrap = el('div', { id: 'proceed-wrap', style: 'display:none;margin-top:4px' }, [
+            el('button', {
+                class: 'btn btn-primary btn-large', type: 'button', id: 'proceed-btn',
+                onclick: onProceed
+            }, 'Proceed to Test →')
+        ]);
+        screen.appendChild(proceedWrap);
+
         // known-limits footer
         screen.appendChild(el('div', { class: 'footer-limits', html:
             'Frontal view · knee height vs hip height · right knee = official score. ' +
             'No depth angles. Camera height/tilt affects apparent knee height — see on-screen checks. Not a medical device.' }));
 
         mount(screen);
+        // if a language was already chosen this session, reflect it
+        if (state.lang) revealProceed();
     }
 
     function renderLangVideo() {
@@ -208,12 +219,13 @@
         });
         vwrap.appendChild(switcher);
 
-        // PROCEED appears only after a language is chosen (not merely disabled)
-        const proceed = el('button', {
-            class: 'btn btn-primary btn-large', type: 'button', id: 'proceed-btn',
-            onclick: onProceed
-        }, 'Proceed to Test →');
-        vwrap.appendChild(proceed);
+        // reveal the PROCEED button that lives below the form
+        revealProceed();
+    }
+
+    function revealProceed() {
+        const w = document.getElementById('proceed-wrap');
+        if (w) w.style.display = '';
     }
 
     // ---- participant form ----------------------------------------------------
@@ -373,7 +385,6 @@
     }
 
     function onProceed() {
-        if (!state.lang) return; // guard; PROCEED only exists after language chosen
         const v = readForm();
         if (!validate(v)) {
             const firstErr = document.querySelector('.err:not(:empty)');
@@ -382,12 +393,19 @@
         }
         state.participant = v;
 
-        if (v.unable_to_perform) {
-            // record a 0-score session and go straight to results (Phase 6 wires results fully)
-            App.toUnableResult(v);
+        // Only the explicitly-ticked "Unable to perform" checkbox records a 0 and skips
+        // the camera — and we confirm first so it can never happen by accident.
+        if (v.unable_to_perform === true) {
+            modal({
+                title: 'Record 0 and skip the camera?',
+                body: 'The "Unable to perform" box is ticked. This records <b>0 steps</b> and does not open the camera. Continue?',
+                buttons: [
+                    { label: 'Cancel', class: 'btn', onClick: c => c() },
+                    { label: 'Record 0', class: 'btn btn-danger', onClick: c => { c(); App.toUnableResult(v); } }
+                ]
+            });
             return;
         }
-        // Phase 2+ wires up S2. For Phase 1, acknowledge readiness.
         App.toS2(v);
     }
 

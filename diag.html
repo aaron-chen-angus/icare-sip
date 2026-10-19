@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SIP//LAB — load diagnostics</title>
+    <style>
+        body { font: 15px/1.6 monospace; background: #05070d; color: #dfe9ff; padding: 16px; }
+        .ok { color: #4cdf7c; } .bad { color: #ff3b30; } .warn { color: #ffa500; }
+        h1 { font-size: 1.1rem; color: #00d4ff; }
+        pre { white-space: pre-wrap; }
+        button { font: inherit; background: #0a1120; color: #ff6a00; border: 1px solid #ff6a00; padding: 10px 16px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>SIP//LAB load diagnostics</h1>
+    <p>Open this on the SAME phone/URL where the app misbehaves, then screenshot the result.</p>
+    <pre id="out">running…</pre>
+    <button id="cam">Test camera permission</button>
+    <button id="mp">Test MediaPipe CDN</button>
+    <pre id="out2"></pre>
+
+    <script>
+    var errors = [];
+    window.addEventListener('error', function (e) { errors.push((e.message || 'err') + ' @ ' + (e.filename || '') + ':' + (e.lineno || '')); });
+    </script>
+    <script src="js/config.js"></script>
+    <script src="js/schema.js"></script>
+    <script src="js/geom.js"></script>
+    <script src="js/analysis.js"></script>
+    <script src="js/export.js"></script>
+    <script src="js/charts.js"></script>
+    <script src="js/pose-engine.js"></script>
+    <script src="js/screen-live.js"></script>
+    <script src="js/app.js"></script>
+    <script src="js/screen-results.js"></script>
+    <script>
+    (function () {
+        var checks = [
+            ['CONFIG', typeof CONFIG !== 'undefined'],
+            ['SCHEMA', typeof SCHEMA !== 'undefined'],
+            ['Geom', typeof Geom !== 'undefined'],
+            ['SIPAnalysis.run', typeof window.SIPAnalysis !== 'undefined' && typeof SIPAnalysis.run === 'function'],
+            ['Exporter.buildZip', typeof window.Exporter !== 'undefined' && typeof Exporter.buildZip === 'function'],
+            ['Charts.progressOverTime', typeof window.Charts !== 'undefined' && typeof Charts.progressOverTime === 'function'],
+            ['PoseEngine', typeof PoseEngine === 'function'],
+            ['LiveScreens.enterS2', typeof window.LiveScreens !== 'undefined' && typeof LiveScreens.enterS2 === 'function'],
+            ['LiveScreens.enterS3', typeof window.LiveScreens !== 'undefined' && typeof LiveScreens.enterS3 === 'function'],
+            ['App', typeof App !== 'undefined'],
+            ['App.toS2', typeof App !== 'undefined' && typeof App.toS2 === 'function'],
+            ['App.runAnalysisAndShowResults (screen-results installed)', typeof App !== 'undefined' && typeof App.runAnalysisAndShowResults === 'function'],
+            ['secure context (HTTPS)', window.isSecureContext === true],
+            ['getUserMedia available', !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)]
+        ];
+        var lines = checks.map(function (c) { return (c[1] ? '✅ OK   ' : '❌ FAIL ') + c[0]; });
+        if (errors.length) lines.push('\nSCRIPT ERRORS:\n' + errors.join('\n'));
+        else lines.push('\nNo script load errors.');
+        document.getElementById('out').textContent = lines.join('\n');
+    })();
+
+    document.getElementById('cam').onclick = function () {
+        var o = document.getElementById('out2');
+        o.textContent = 'requesting camera…';
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+            .then(function (s) { o.textContent = '✅ camera OK (' + s.getVideoTracks().length + ' track)'; s.getTracks().forEach(function (t) { t.stop(); }); })
+            .catch(function (e) { o.textContent = '❌ camera: ' + e.name + ' — ' + e.message; });
+    };
+    document.getElementById('mp').onclick = function () {
+        var o = document.getElementById('out2');
+        o.textContent = 'loading MediaPipe from CDN…';
+        import(CONFIG.pose.bundleUrl)
+            .then(function (m) { o.textContent = '✅ MediaPipe module loaded (' + (m.PoseLandmarker ? 'PoseLandmarker present' : 'but PoseLandmarker missing') + ')'; })
+            .catch(function (e) { o.textContent = '❌ MediaPipe CDN blocked/failed: ' + e.message; });
+    };
+    </script>
+</body>
+</html>

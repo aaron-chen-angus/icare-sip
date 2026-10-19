@@ -35,6 +35,26 @@
 
     <!-- hidden video + canvas reused by the pose engine (moved into the live DOM at runtime) -->
 
+    <!-- Visible error banner: surface any script/runtime error on the device itself -->
+    <div id="fatal-error" style="display:none;position:fixed;inset:0;z-index:9999;background:#0a0410;color:#ffd0d0;font:14px/1.5 monospace;padding:18px;overflow:auto"></div>
+    <script>
+    (function () {
+        function show(msg) {
+            var b = document.getElementById('fatal-error');
+            if (!b) return;
+            b.style.display = 'block';
+            b.textContent = 'SIP//LAB error (screenshot this):\n\n' + msg +
+                '\n\nReload the page. If this persists, the MediaPipe CDN or a script may be blocked on this network.';
+        }
+        window.addEventListener('error', function (e) {
+            show((e.message || 'script error') + (e.filename ? '\n' + e.filename + ':' + e.lineno : ''));
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+            show('Unhandled promise: ' + ((e.reason && (e.reason.message || e.reason)) || 'unknown'));
+        });
+    })();
+    </script>
+
     <!-- Scripts in dependency order (no bundler, classic tags) -->
     <script src="js/config.js"></script>
     <script src="js/schema.js"></script>
