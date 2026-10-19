@@ -23,7 +23,7 @@ const CONFIG = {
     // Google Sheets (Apps Script web app). Leave empty to disable upload
     // (local ZIP export always works). Paste the /exec URL here after deploy.
     sheets: {
-        webhookUrl: '',
+        webhookUrl: 'https://script.google.com/macros/s/AKfycbyaK4HxjlDBlbZbqGdM5DdwrnydFuUoxViCLYtPRp02Q6gQmZ16hyyIlU-xPOpzfGAW/exec',
         uploadFrames: false,   // true = also upload the 30 Hz analysed series to a "Frames" sheet
         framesChunkRows: 500   // batch size when uploading frames
     },
